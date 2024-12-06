@@ -13,20 +13,24 @@ import torch
 
 app = FastAPI()
 
-print('Loading VITS...')
+print("Loading VITS...")
 t0 = time.time()
-vits_model = 'tts_models/en/vctk/vits'
+vits_model = "tts_models/en/vctk/vits"
+# vits_model = "voice_conversion_models/multilingual/vctk/freevc24"
+
+print(f"###### TTS List: {TTS.list_models()}")
 
 if torch.cuda.is_available():
     device = "cuda"
-elif torch.backends.mps.is_available():
-    device = "mps"
+# elif torch.backends.mps.is_available():
+#     device = "mps"
 else:
     device = "cpu"
 
 tts_vits = TTS(vits_model).to(device)
 elapsed = time.time() - t0
 print(f"Loaded in {elapsed:.2f}s")
+
 
 class TTSRequest(BaseModel):
     text: str
@@ -35,6 +39,7 @@ class TTSRequest(BaseModel):
     speaker: str = "p335"
 
     # Male
+
 
 @app.get("/", response_class=HTMLResponse)
 async def get_form():
@@ -55,15 +60,16 @@ async def get_form():
     </html>
     """
 
+
 @app.post("/tts")
 async def text_to_speech(request: TTSRequest):
     try:
         # Text preprocessing
         text = request.text.strip()
-        text = re.sub(r'~+', '!', text)
+        text = re.sub(r"~+", "!", text)
         text = re.sub(r"\(.*?\)", "", text)
         text = re.sub(r"(\*[^*]+\*)|(_[^_]+_)", "", text).strip()
-        text = re.sub(r'[^\x00-\x7F]+', '', text)
+        text = re.sub(r"[^\x00-\x7F]+", "", text)
 
         t0 = time.time()
         wav_np = tts_vits.tts(text, speaker=request.speaker)
@@ -78,12 +84,12 @@ async def text_to_speech(request: TTSRequest):
         wav_np = np.clip(wav_np, -1, 1)
 
         # Resample to 24kHz
-        original_sr=22050
+        original_sr = 22050
         wav_np_24k = librosa.resample(wav_np, orig_sr=original_sr, target_sr=24000)
 
         # Convert to Opus using an in-memory buffer
         buffer = io.BytesIO()
-        sf.write(buffer, wav_np_24k, 24000, format='ogg', subtype='opus')
+        sf.write(buffer, wav_np_24k, 24000, format="ogg", subtype="opus")
         # sf.write(buffer, wav_np, 24000, format='ogg', subtype='opus')
         buffer.seek(0)
 
@@ -95,4 +101,5 @@ async def text_to_speech(request: TTSRequest):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8003)
