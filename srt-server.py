@@ -4,7 +4,7 @@ import tempfile
 import torch
 
 from abc import ABC, abstractmethod
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel
@@ -167,6 +167,11 @@ async def create_transcription(
     temperature: float = Form(0.0),
 ):
     audio_content = await file.read()
+    try:
+        sf.info(file.file)  # Check if the file is a valid audio file
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid audio file format")
+
     text, _ = engine.transcribe(
         audio_content, generate_kwargs={"language": language, "task": "transcribe"}
     )
@@ -184,6 +189,11 @@ async def create_translation(
 ):
     # Read the audio file
     audio_content = await file.read()
+    try:
+        sf.info(file.file)  # Check if the file is a valid audio file
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid audio file format")
+
     text, _ = engine.transcribe(audio_content, generate_kwargs={"task": "translate"})
     response = {"text": text}
     return JSONResponse(content=response, media_type="application/json")
@@ -198,6 +208,10 @@ async def inference(
 ):
     # Read the audio file
     audio_content = await file.read()
+    try:
+        sf.info(file.file)  # Check if the file is a valid audio file
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid audio file format")
 
     temperature += temperature_inc
 
