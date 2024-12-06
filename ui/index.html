@@ -151,7 +151,9 @@
 
         // Network
         let startTime;
-        let socket = io(window.location.origin);
+        let socket = io(window.location.origin,{
+            transports: ['websocket']
+        })
         let isProcessing = false;
         let latencyIntervalId = null;
         let ping = null;
