@@ -310,7 +310,7 @@ async def generate_llm_response(websocket, session_id, text):
                     "Authorization": f"Bearer {OPENAI_API_KEY}",
                 },
                 json={
-                    "model": "gpt-3.5",
+                    "model": "gpt-3.5-turbo",
                     "messages": conversation + [{"role": "user", "content": text}],
                     "stream": True,
                 },
