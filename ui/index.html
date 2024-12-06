@@ -151,7 +151,7 @@
 
         // Network
         let startTime;
-        let socket = io();
+        let socket = io(window.location.origin);
         let isProcessing = false;
         let latencyIntervalId = null;
         let ping = null;
