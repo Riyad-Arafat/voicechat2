@@ -18,7 +18,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 from aiortc.contrib.media import MediaPlayer, MediaRecorder
 
 # External endpoints
-SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8001/inference")
+SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8002/inference")
 TTS_ENDPOINT = os.getenv("TTS_ENDPOINT", "http://localhost:8003/tts")
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "https://api.openai.com/v1/chat/completions")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

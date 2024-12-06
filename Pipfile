@@ -1,0 +1,27 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+aiortc = "*"
+fastapi = "*"
+uvicorn = "*"
+websockets = "*"
+coqui-tts = "*"
+loguru = "*"
+numpy = "*"
+scipy = "*"
+whisperx = "*"
+python-multipart = "*"
+opuslib = "*"
+mutagen = "*"
+torch = "*"
+torchaudio = "*"
+transformers = "*"
+accelerate = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.13"

@@ -7,7 +7,7 @@
 # Replace these with your actual values
 JUMP_SERVER="jump_server"
 LOCAL_PORT="8000"  # The port your FastAPI server runs on
-REMOTE_PORT="8001"  # An arbitrary port on the jump server
+REMOTE_PORT="8002"  # An arbitrary port on the jump server
 
 # Create the reverse tunnel
 ssh -N -R $REMOTE_PORT:localhost:$LOCAL_PORT $JUMP_SERVER
