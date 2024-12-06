@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>voicechat2</title>
-
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/symbl-opus-encdec@0.1.2/src/recorder.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.7/dist/bundle.min.js"></script>
@@ -151,7 +151,7 @@
 
         // Network
         let startTime;
-        let socket;
+        let socket = io();
         let isProcessing = false;
         let latencyIntervalId = null;
         let ping = null;
@@ -192,7 +192,7 @@
         function measureLatency() {
             if (!isProcessing) {
                 ping = performance.now();
-                socket.send(JSON.stringify({ type: 'ping' }));
+                socket.emit('message', JSON.stringify({ type: 'ping' }));
             }
         }
 
@@ -328,10 +328,10 @@
 
                                 if (socket && socket.readyState === WebSocket.OPEN) {
                                     log(`Sending audio file: ${opusBlob.size} bytes`);
-                                    socket.send(opusBlob);
+                                                                        socket.emit('message', opusBlob);
                                     log('Audio file sent successfully');
                                     // Send stop_recording message
-                                    socket.send(JSON.stringify({ action: "stop_recording" }));
+                                    socket.emit('message', JSON.stringify({ action: "stop_recording" }));
                                     log('Sent stop_recording message');
                                 } else {
                                     log('WebSocket is not open. Cannot send audio.');
@@ -400,7 +400,7 @@
                     // Send stop_recording message to server
                     const stopMessage = JSON.stringify({ action: "stop_recording" });
                     log(`Sending stop_recording message: ${stopMessage}`);
-                    socket.send(stopMessage);
+                    socket.emit('message', stopMessage);
                 } catch (error) {
                     log(`Error stopping recording: ${error.message}`);
                 }
@@ -534,7 +534,7 @@
             recorder.ondataavailable = (typedArray) => {
                 log(`Data available: ${typedArray.length} bytes`);
                 if (socket && socket.readyState === WebSocket.OPEN) {
-                    socket.send(typedArray);
+                    socket.emit('message', typedArray);
                 }
             };
 
@@ -574,6 +574,80 @@
             audio.play();
         }
 
+
+
+        function initializeSocketIO() {
+        socket.on('connect', () => {
+            log('Socket.IO connected');
+            status.textContent = 'Ready';
+            recordButton.disabled = false;
+            startLatencyMeasurement();
+        });
+    
+        socket.on('disconnect', (reason) => {
+            log(`Socket.IO disconnected. Reason: ${reason}`);
+            status.textContent = 'Disconnected';
+            recordButton.disabled = true;
+            stopLatencyMeasurement();
+        });
+    
+        socket.on('connect_error', (error) => {
+            log(`Socket.IO error: ${error.message}`);
+            status.textContent = 'Error';
+        });
+    
+        socket.on('message', (event) => {
+            log(`Received message from server: ${typeof event}`);
+            if (event instanceof Blob) {
+                // Handle audio data
+                queueAudioForPlayback(event);
+            } else {
+                // Handle JSON messages
+                try {
+                    const message = JSON.parse(event);
+    
+                    // Don't spam logs...
+                    if (message.type !== 'pong') {
+                        log(`Parsed server message: ${JSON.stringify(message)}`);
+                    }
+    
+                    if (message.type === 'pong') {
+                        const latency = performance.now() - ping;
+                        updateLatencyDisplay(latency);
+                    } else if (message.type === 'text') {
+                        // Handle streamed text from LLM
+                        updateAIResponse(message.content);
+                    } else if (message.type === 'transcription') {
+                        // Handle transcribed user input
+                        displayMessage('User', message.content);
+                        // Reset AI response for new turn
+                        currentAIResponse = '';
+                        aiMessageElement = null;
+                        isAIResponding = true;
+                    } else if (message.type === 'first_audio_response') {
+                        firstResponseTime = Date.now();
+                    } else if (message.type === 'latency_metrics') {
+                        updateLatencyMetrics(message.metrics);
+                    } else if (message.type === 'processing_complete') {
+                        status.textContent = 'Ready';
+                        isProcessing = false;
+                        startLatencyMeasurement();
+                        isAIResponding = false;
+                        // Remove the cursor
+                        if (aiMessageElement) {
+                            const cursor = aiMessageElement.querySelector('.ai-cursor');
+                            if (cursor) cursor.remove();
+                        }
+                    } else if (message.type === 'error') {
+                        log(`Error from server: ${message.message}`);
+                        status.textContent = 'Error';
+                    }
+                } catch (error) {
+                    log(`Error parsing server message: ${error.message}`);
+                }
+            }
+        });
+    }
 
     function initializeWebSocketAsync() {
         return new Promise((resolve, reject) => {
@@ -703,7 +777,7 @@
             console.log('Encoder object:', recorder.encoder);
 
             try {
-                await initializeWebSocketAsync();
+                await initializeSocketIO();
                 log('Application initialized');
             } catch (error) {
                 log(`Error initializing application: ${error.message}`);

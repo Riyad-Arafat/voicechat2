@@ -14,10 +14,11 @@ import uuid
 import wave
 
 from collections import deque
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from mutagen.oggopus import OggOpus
+from fastapi_socketio import SocketManager
 
 # External endpoints
 SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8002/inference")
@@ -25,12 +26,12 @@ TTS_ENDPOINT = os.getenv("TTS_ENDPOINT", "http://localhost:8003/tts")
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "https://api.openai.com/v1/chat/completions")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 app.mount("/ui", StaticFiles(directory="ui"), name="ui")
+sio = SocketManager(app=app)
 
 SYSTEM = {
     "role": "system",
@@ -173,122 +174,108 @@ async def transcribe_audio(audio_data, session_id, turn_id):
         raise
 
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
+@sio.on("connect")
+async def connect(sid, environ):
     session_id = conversation_manager.create_session()
-    logger.info(f"New WebSocket connection established. Session ID: {session_id}")
+    sio.enter_room(sid, session_id)
+    logger.info(f"New socket.io connection established. Session ID: {session_id}")
 
-    try:
-        while True:
-            message = await websocket.receive()
-            # logger.debug(f"Received message: {message}")
 
-            if "bytes" in message:
-                audio_data = message["bytes"]
-                logger.debug(f"Received audio data. Size: {len(audio_data)} bytes")
-                conversation_manager.sessions[session_id]["audio_buffer"] = audio_data
-            elif "text" in message:
-                logger.debug(f"Received text message: {message['text']}")
-                try:
-                    data = json.loads(message["text"])
-                    logger.debug(f"Parsed JSON data: {data}")
-                    if data.get("type") == "ping":
-                        # Immediately send a pong response
-                        await websocket.send_json({"type": "pong"})
-                    elif data.get("action") == "stop_recording":
+@sio.on("disconnect")
+async def disconnect(sid):
+    session_id = sio.get_session(sid)
+    logger.info(f"Socket.io disconnected for session {session_id}")
+
+
+@sio.on("message")
+async def handle_message(sid, data):
+    session_id = sio.get_session(sid)
+    if isinstance(data, bytes):
+        audio_data = data
+        logger.debug(f"Received audio data. Size: {len(audio_data)} bytes")
+        conversation_manager.sessions[session_id]["audio_buffer"] = audio_data
+    elif isinstance(data, str):
+        logger.debug(f"Received text message: {data}")
+        try:
+            data = json.loads(data)
+            logger.debug(f"Parsed JSON data: {data}")
+            if data.get("type") == "ping":
+                # Immediately send a pong response
+                await sio.emit("message", {"type": "pong"}, room=session_id)
+            elif data.get("action") == "stop_recording":
+                logger.info("Stop recording message received. Processing audio...")
+                conversation_manager.reset_latency_metrics(session_id)
+                if conversation_manager.sessions[session_id]["is_processing"]:
+                    logger.warning("Interrupting ongoing processing")
+                    conversation_manager.sessions[session_id][
+                        "llm_output_sentences"
+                    ].clear()
+                    conversation_manager.sessions[session_id]["is_processing"] = False
+                    await sio.emit("message", {"type": "interrupted"}, room=session_id)
+                else:
+                    conversation_manager.sessions[session_id]["is_processing"] = True
+                    turn_id = conversation_manager.sessions[session_id]["current_turn"]
+                    try:
+                        audio_data = conversation_manager.sessions[session_id][
+                            "audio_buffer"
+                        ]
                         logger.info(
-                            "Stop recording message received. Processing audio..."
+                            f"Processing audio data. Size: {len(audio_data)} bytes"
                         )
-                        conversation_manager.reset_latency_metrics(session_id)
-                        if conversation_manager.sessions[session_id]["is_processing"]:
-                            logger.warning("Interrupting ongoing processing")
-                            conversation_manager.sessions[session_id][
-                                "llm_output_sentences"
-                            ].clear()
-                            conversation_manager.sessions[session_id][
-                                "is_processing"
-                            ] = False
-                            await websocket.send_json({"type": "interrupted"})
-                        else:
-                            conversation_manager.sessions[session_id][
-                                "is_processing"
-                            ] = True
-                            turn_id = conversation_manager.sessions[session_id][
-                                "current_turn"
-                            ]
-                            try:
-                                audio_data = conversation_manager.sessions[session_id][
-                                    "audio_buffer"
-                                ]
-                                logger.info(
-                                    f"Processing audio data. Size: {len(audio_data)} bytes"
-                                )
-                                text = await transcribe_audio(
-                                    audio_data, session_id, turn_id
-                                )
-                                if not text:
-                                    raise ValueError(
-                                        "Transcription resulted in empty text"
-                                    )
-                                logger.info(f"Transcription result: {text}")
-                                conversation_manager.add_user_message(session_id, text)
+                        text = await transcribe_audio(audio_data, session_id, turn_id)
+                        if not text:
+                            raise ValueError("Transcription resulted in empty text")
+                        logger.info(f"Transcription result: {text}")
+                        conversation_manager.add_user_message(session_id, text)
 
-                                # Send transcribed text to client
-                                await websocket.send_json(
-                                    {"type": "transcription", "content": text}
-                                )
-
-                                await process_and_stream(websocket, session_id, text)
-
-                                latencies = conversation_manager.calculate_latencies(
-                                    session_id
-                                )
-                                await websocket.send_json(
-                                    {"type": "latency_metrics", "metrics": latencies}
-                                )
-                            except Exception as e:
-                                logger.error(f"Error during processing: {str(e)}")
-                                logger.error(traceback.format_exc())
-                                await websocket.send_json(
-                                    {"type": "error", "message": str(e)}
-                                )
-                            finally:
-                                conversation_manager.sessions[session_id][
-                                    "is_processing"
-                                ] = False
-                                await websocket.send_json(
-                                    {"type": "processing_complete"}
-                                )
-                    else:
-                        logger.warning(
-                            f"Received unexpected action: {data.get('action')}"
+                        # Send transcribed text to client
+                        await sio.emit(
+                            "message",
+                            {"type": "transcription", "content": text},
+                            room=session_id,
                         )
-                except json.JSONDecodeError:
-                    logger.error(
-                        f"Failed to parse JSON from text message: {message['text']}"
-                    )
+
+                        await process_and_stream(session_id, text)
+
+                        latencies = conversation_manager.calculate_latencies(session_id)
+                        await sio.emit(
+                            "message",
+                            {"type": "latency_metrics", "metrics": latencies},
+                            room=session_id,
+                        )
+                    except Exception as e:
+                        logger.error(f"Error during processing: {str(e)}")
+                        logger.error(traceback.format_exc())
+                        await sio.emit(
+                            "message",
+                            {"type": "error", "message": str(e)},
+                            room=session_id,
+                        )
+                    finally:
+                        conversation_manager.sessions[session_id][
+                            "is_processing"
+                        ] = False
+                        await sio.emit(
+                            "message", {"type": "processing_complete"}, room=session_id
+                        )
             else:
-                logger.warning(f"Received message with unexpected format: {message}")
-
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for session {session_id}")
-    except Exception as e:
-        logger.error(f"Unexpected error in WebSocket endpoint: {str(e)}")
-        logger.error(traceback.format_exc())
-        await websocket.close(code=1011, reason=str(e))
+                logger.warning(f"Received unexpected action: {data.get('action')}")
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse JSON from text message: {data}")
+    else:
+        logger.warning(f"Received message with unexpected format: {data}")
 
 
-async def process_and_stream(websocket: WebSocket, session_id, text):
+async def process_and_stream(session_id, text):
     try:
         # We interleave LLM and TTS output here
-        await generate_llm_response(websocket, session_id, text)
+        await generate_llm_response(session_id, text)
     finally:
         conversation_manager.sessions[session_id]["is_processing"] = False
         conversation_manager.sessions[session_id]["first_audio_sent"] = False
 
 
-async def generate_llm_response(websocket, session_id, text):
+async def generate_llm_response(session_id, text):
     conversation_manager.update_latency_metric(session_id, "llm_start", time.time())
     try:
         conversation = conversation_manager.get_conversation(session_id)
@@ -332,8 +319,10 @@ async def generate_llm_response(websocket, session_id, text):
                                             first_token_received = True
                                         complete_text += content
                                         accumulated_text += content
-                                        await websocket.send_json(
-                                            {"type": "text", "content": content}
+                                        await sio.emit(
+                                            "message",
+                                            {"type": "text", "content": content},
+                                            room=session_id,
                                         )
 
                                         # Check if we have a complete sentence
@@ -349,7 +338,7 @@ async def generate_llm_response(websocket, session_id, text):
                                                     session_id, "tts_start", time.time()
                                                 )
                                             await generate_and_send_tts(
-                                                websocket, accumulated_text
+                                                session_id, accumulated_text
                                             )
                                             accumulated_text = ""
 
@@ -362,8 +351,10 @@ async def generate_llm_response(websocket, session_id, text):
                                                     "first_audio_response",
                                                     time.time(),
                                                 )
-                                                await websocket.send_json(
-                                                    {"type": "first_audio_response"}
+                                                await sio.emit(
+                                                    "message",
+                                                    {"type": "first_audio_response"},
+                                                    room=session_id,
                                                 )
                                                 conversation_manager.sessions[
                                                     session_id
@@ -384,7 +375,7 @@ async def generate_llm_response(websocket, session_id, text):
                         conversation_manager.update_latency_metric(
                             session_id, "tts_start", time.time()
                         )
-                    await generate_and_send_tts(websocket, accumulated_text)
+                    await generate_and_send_tts(session_id, accumulated_text)
 
                     if not conversation_manager.sessions[session_id][
                         "first_audio_sent"
@@ -393,7 +384,9 @@ async def generate_llm_response(websocket, session_id, text):
                         conversation_manager.update_latency_metric(
                             session_id, "first_audio_response", time.time()
                         )
-                        await websocket.send_json({"type": "first_audio_response"})
+                        await sio.emit(
+                            "message", {"type": "first_audio_response"}, room=session_id
+                        )
                         conversation_manager.sessions[session_id][
                             "first_audio_sent"
                         ] = True
@@ -412,31 +405,11 @@ async def generate_llm_response(websocket, session_id, text):
         raise
 
 
-async def generate_and_send_tts(websocket, text):
+async def generate_and_send_tts(session_id, text):
     async with aiohttp.ClientSession() as session:
         async with session.post(TTS_ENDPOINT, json={"text": text}) as response:
             opus_data = await response.read()
-    await websocket.send_bytes(opus_data)
-
-
-async def process_llm_content(websocket, session_id, content):
-    sentences = re.split(r"(?<=[.!?])\s+", content)
-    for sentence in sentences:
-        if sentence:
-            processed_sentence = process_sentence(sentence)
-            conversation_manager.sessions[session_id]["llm_output_sentences"].append(
-                processed_sentence
-            )
-            conversation_manager.add_ai_message(session_id, processed_sentence)
-            logger.debug(f"Processed sentence: {processed_sentence}")
-
-
-def process_sentence(sentence):
-    sentence = re.sub(r"~+", "!", sentence)
-    sentence = re.sub(r"\(.*?\)", "", sentence)
-    sentence = re.sub(r"(\*[^*]+\*)|(_[^_]+_)", "", sentence)
-    sentence = re.sub(r"[^\x00-\x7F]+", "", sentence)
-    return sentence.strip()
+    await sio.emit("message", opus_data, room=session_id)
 
 
 @app.get("/")
