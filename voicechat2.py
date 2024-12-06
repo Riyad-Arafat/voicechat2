@@ -239,6 +239,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     {"type": "transcription", "content": text}
                                 )
 
+                                print(f"Processing text: {text}")
                                 await process_and_stream(websocket, session_id, text)
 
                                 latencies = conversation_manager.calculate_latencies(
@@ -248,6 +249,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                     {"type": "latency_metrics", "metrics": latencies}
                                 )
                             except Exception as e:
+                                print(f"Error during processing: {str(e)}")
                                 logger.error(f"Error during processing: {str(e)}")
                                 logger.error(traceback.format_exc())
                                 await websocket.send_json(
@@ -257,6 +259,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 conversation_manager.sessions[session_id][
                                     "is_processing"
                                 ] = False
+                                print("Processing complete")
                                 await websocket.send_json(
                                     {"type": "processing_complete"}
                                 )
@@ -289,11 +292,13 @@ async def process_and_stream(websocket: WebSocket, session_id, text):
 
 
 async def generate_llm_response(websocket, session_id, text):
+    print("generate_llm_response")
     conversation_manager.update_latency_metric(session_id, "llm_start", time.time())
     try:
         conversation = conversation_manager.get_conversation(session_id)
 
         async with aiohttp.ClientSession() as session:
+
             async with session.post(
                 LLM_ENDPOINT,
                 headers={
@@ -369,8 +374,10 @@ async def generate_llm_response(websocket, session_id, text):
                                                     session_id
                                                 ]["first_audio_sent"] = True
                         except json.JSONDecodeError:
+                            print(f"Failed to parse JSON: {line_text}")
                             logger.warning(f"Failed to parse JSON: {line_text}")
                         except Exception as e:
+                            print(f"Error processing line: {e}")
                             logger.error(f"Error processing line: {e}")
 
                 # Send any remaining text
