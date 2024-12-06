@@ -305,7 +305,7 @@ async def generate_llm_response(websocket, session_id, text):
                     "Authorization": f"Bearer {OPENAI_API_KEY}",
                 },
                 json={
-                    "model": "gpt-3.5-turbo",
+                    "model": "gpt-3.5",
                     "messages": conversation + [{"role": "user", "content": text}],
                     "stream": True,
                 },
@@ -316,6 +316,7 @@ async def generate_llm_response(websocket, session_id, text):
                 first_sentence_received = False
                 async for line in response.content:
                     if line:
+                        print(f"line: {line}")
                         try:
                             line_text = line.decode("utf-8").strip()
                             if line_text.startswith("data: "):
@@ -381,6 +382,10 @@ async def generate_llm_response(websocket, session_id, text):
                             logger.error(f"Error processing line: {e}")
 
                 # Send any remaining text
+                print(f"accumulated_text: {accumulated_text}")
+                print(f"complete_text: {complete_text}")
+
+                print(f"response: {response.content}")
                 if accumulated_text:
                     logger.debug(f"Remaining text: {accumulated_text}")
                     if not first_sentence_received:
