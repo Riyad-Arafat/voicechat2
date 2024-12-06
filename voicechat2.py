@@ -19,6 +19,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from mutagen.oggopus import OggOpus
 
+from dotenv import load_dotenv
+
+load_dotenv()  # take environment variables from .env.
+
+
 # External endpoints
 SRT_ENDPOINT = os.getenv("SRT_ENDPOINT", "http://localhost:8002/inference")
 TTS_ENDPOINT = os.getenv("TTS_ENDPOINT", "http://localhost:8003/tts")
